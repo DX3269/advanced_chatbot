@@ -18,7 +18,7 @@ app.add_middleware(
 )
 
 
-llm_pipeline = pipeline("text2text-generation", model="google/flan-t5-small")  # You can change the model
+llm_pipeline = pipeline("text2text-generation", model="google/flan-t5-small") 
 llm = HuggingFacePipeline(pipeline=llm_pipeline)
 
 
