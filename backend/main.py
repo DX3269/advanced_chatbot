@@ -1,100 +1,70 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, ForeignKey
-from sqlalchemy.orm import sessionmaker, declarative_base
-from fastapi.middleware.cors import CORSMiddleware
+from langchain.chains import LLMChain
+from langchain.prompts import PromptTemplate
+from langchain.llms import HuggingFacePipeline
+from transformers import pipeline
 
-# SQLite Database Connection
-DB_URL = "sqlite:///./chatbot.db"  # SQLite database file
-engine = create_engine(DB_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
 
-# Define Models
-class Supplier(Base):
-    __tablename__ = "suppliers"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100))
-    contact_info = Column(Text)
-    product_categories_offered = Column(Text)
-
-class Product(Base):
-    __tablename__ = "products"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100))
-    brand = Column(String(100))
-    price = Column(Float)
-    category = Column(String(100))
-    description = Column(Text)
-    supplier_id = Column(Integer, ForeignKey("suppliers.id"))
-
-# Create Database Tables
-Base.metadata.create_all(bind=engine)
-
-# FastAPI App
 app = FastAPI()
+
+from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Frontend URL
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods
-    allow_headers=["*"],  # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-# Utility Function to Fetch Database Session
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
-# Initialize Database with Sample Data
-def init_db():
-    db = SessionLocal()
-    # Add Suppliers
-    supplier1 = Supplier(name="Daksh Electronics", contact_info="contact@daksh.com", product_categories_offered="Electronics, Laptops")
-    supplier2 = Supplier(name="hariom telecom", contact_info="contact@hariom.comcontact@hariom.com", product_categories_offered="Mobile Phones, Tablets")
-    db.add_all([supplier1, supplier2])
-    db.commit()
 
-    # Add Products
-    product1 = Product(name="Yoga", brand="Lenovo", price=899.99, category="Laptops", description="High performance laptop", supplier_id=1)
-    product2 = Product(name="Galaxy Phone", brand="Samsung", price=699.99, category="Mobile Phones", description="Latest smartphone model", supplier_id=2)
-    db.add_all([product1, product2])
-    db.commit()
-    db.close()
+llm_pipeline = pipeline("text2text-generation", model="google/flan-t5-small")  # You can change the model
+llm = HuggingFacePipeline(pipeline=llm_pipeline)
 
-# Initialize the database (run once)
-try:
-    init_db()
-except:
-    pass
+
+query_prompt = PromptTemplate(
+    input_variables=["query"],
+    template="You are a helpful assistant. Summarize this query: {query}",
+)
+
+response_prompt = PromptTemplate(
+    input_variables=["data"],
+    template="Summarize the following data: {data}",
+)
+
+
+query_chain = LLMChain(llm=llm, prompt=query_prompt)
+response_chain = LLMChain(llm=llm, prompt=response_prompt)
+
+
+mock_data = [
+    {"name": "Yoga Laptop", "brand": "Lenovo", "price": 899.99},
+    {"name": "Galaxy Phone", "brand": "Samsung", "price": 699.99},
+]
+
 
 @app.get("/query")
-def handle_query(user_input: str):
+async def handle_query(user_input: str):
     """
-    Process user input and return appropriate data.
+    Processing user input through LangChain and return a response.
     """
-    db = next(get_db())
+    try:
 
-    # Basic Query Parsing
-    if "products under" in user_input.lower():
-        brand = user_input.lower().split("products under")[-1].strip()
-        products = db.query(Product).filter(Product.brand.ilike(f"%{brand}%")).all()
-        if not products:
-            raise HTTPException(status_code=404, detail=f"No products found under brand {brand}.")
-        return [{"id": p.id, "name": p.name, "brand": p.brand, "price": p.price} for p in products]
+        summarized_query = query_chain.run(query=user_input)
 
-    elif "price of" in user_input.lower():
-        product_name = user_input.lower().split("price of")[-1].strip()
-        product = db.query(Product).filter(Product.name.ilike(f"%{product_name}%")).first()
-        if not product:
-            raise HTTPException(status_code=404, detail=f"No product found with name {product_name}.")
-        return {"id": product.id, "name": product.name, "price": product.price}
 
-    else:
-        raise HTTPException(status_code=400, detail="Query not understood. Please rephrase.")
+        if "Yoga" in summarized_query:
+            data = [item for item in mock_data if "Yoga" in item["name"]]
+        elif "Lenovo" in summarized_query:
+            data = [item for item in mock_data if "Lenovo" in item["brand"]]
+        else:
+            data = mock_data
+
+
+        summarized_response = response_chain.run(data=str(data))
+        return {"response": summarized_response}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
